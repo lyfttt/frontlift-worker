@@ -138,6 +138,98 @@ WEBSITE TEXT:
 ${sourceText}`;
 }
 
+const PAYMENT_PRODUCTS = {
+  refresh: { amount: 29900, name: "Frontlift Website Refresh", description: "Four-page responsive website refresh, one revision round, and domain connection walkthrough." },
+  new: { amount: 34900, name: "Frontlift First Website", description: "Four-page responsive first website, one revision round, and domain connection walkthrough." },
+  landing: { amount: 14900, name: "Frontlift Focused Landing Page", description: "One responsive landing page, one revision round, and domain connection walkthrough." },
+};
+
+function validCheckoutOrigin(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const allowed = new Set(["https://getfrontlift.com", "https://www.getfrontlift.com"]);
+    return allowed.has(url.origin) ? url.origin : "";
+  } catch {
+    return "";
+  }
+}
+
+async function stripeRequest(env, path, options = {}) {
+  if (!env.STRIPE_SECRET_KEY) throw new Error("Stripe is not configured.");
+  const response = await fetch(`https://api.stripe.com/v1${path}`, {
+    ...options,
+    headers: {
+      authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      ...(options.headers || {}),
+    },
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.error?.message || "Stripe request failed.");
+  return data;
+}
+
+async function handlePayments(request, env, path) {
+  if (!env.STRIPE_SECRET_KEY) return json(request, env, { ok: false, error: "Stripe is not configured." }, 503);
+  const contentType = request.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    return json(request, env, { ok: false, error: "Content-Type must be application/json." }, 415);
+  }
+
+  const body = await request.json();
+  const projectId = String(body.projectId || "").trim();
+  if (!/^[A-Za-z0-9_-]{8,128}$/.test(projectId)) {
+    return json(request, env, { ok: false, error: "A valid project is required." }, 400);
+  }
+
+  if (path === "/payments/create-checkout") {
+    const product = PAYMENT_PRODUCTS[body.projectType];
+    const origin = validCheckoutOrigin(body.origin);
+    const email = String(body.email || "").trim().slice(0, 254);
+    if (!product) return json(request, env, { ok: false, error: "Invalid project type." }, 400);
+    if (!origin) return json(request, env, { ok: false, error: "Checkout must start from getfrontlift.com." }, 400);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return json(request, env, { ok: false, error: "A valid customer email is required." }, 400);
+
+    const form = new URLSearchParams();
+    form.set("mode", "payment");
+    form.set("success_url", origin + "/payment-success?session_id={CHECKOUT_SESSION_ID}");
+    form.set("cancel_url", origin + "/scope");
+    form.set("customer_email", email);
+    form.set("client_reference_id", projectId);
+    form.set("metadata[project_id]", projectId);
+    form.set("metadata[project_type]", body.projectType);
+    form.set("payment_intent_data[metadata][project_id]", projectId);
+    form.set("payment_intent_data[metadata][project_type]", body.projectType);
+    form.set("line_items[0][quantity]", "1");
+    form.set("line_items[0][price_data][currency]", "usd");
+    form.set("line_items[0][price_data][unit_amount]", String(product.amount));
+    form.set("line_items[0][price_data][product_data][name]", product.name);
+    form.set("line_items[0][price_data][product_data][description]", product.description);
+
+    const session = await stripeRequest(env, "/checkout/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: form,
+    });
+    return json(request, env, { ok: true, url: session.url, sessionId: session.id });
+  }
+
+  const sessionId = String(body.sessionId || "").trim();
+  if (!/^cs_(?:test_|live_)?[A-Za-z0-9_]+$/.test(sessionId)) {
+    return json(request, env, { ok: false, error: "A valid checkout session is required." }, 400);
+  }
+  const session = await stripeRequest(env, `/checkout/sessions/${encodeURIComponent(sessionId)}`);
+  const matches = session.client_reference_id === projectId;
+  return json(request, env, {
+    ok: true,
+    paid: matches && session.payment_status === "paid" && session.status === "complete",
+    matches,
+    status: session.status,
+    paymentStatus: session.payment_status,
+    amountTotal: session.amount_total,
+    currency: session.currency,
+  });
+}
+
 export default {
   async fetch(request, env) {
     const requestId = crypto.randomUUID();
@@ -150,9 +242,20 @@ export default {
       return json(request, env, {
         ok: true,
         service: "frontlift-generator",
-        version: "1.0.0",
+        version: "1.1.0",
+        stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
         aiConfigured: Boolean(env.AI),
       });
+    }
+
+    if (request.method === "POST" && ["/payments/create-checkout", "/payments/verify"].includes(path)) {
+      try {
+        return await handlePayments(request, env, path);
+      } catch (error) {
+        const message = error?.message || "Payment request failed.";
+        console.error(JSON.stringify({ requestId, path, message }));
+        return json(request, env, { ok: false, error: message, requestId }, 422);
+      }
     }
 
     if (request.method !== "POST" || !["/generate", "/api/generate"].includes(path)) {
