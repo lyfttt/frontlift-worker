@@ -1,0 +1,9 @@
+name = "frontlift-generator"
+main = "index.js"
+compatibility_date = "2026-09-18"
+
+[ai]
+binding = "AI"
+
+[vars]
+MAX_SOURCE_CHARS = "30000"
