@@ -154,12 +154,20 @@ function validCheckoutOrigin(value) {
   }
 }
 
-async function stripeRequest(env, path, options = {}) {
-  if (!env.STRIPE_SECRET_KEY) throw new Error("Stripe is not configured.");
+async function getStripeSecret(env) {
+  const binding = env.STRIPE_SECRET_KEY;
+  if (!binding) return "";
+  if (typeof binding === "string") return binding;
+  if (typeof binding.get === "function") return String((await binding.get()) || "");
+  return "";
+}
+
+async function stripeRequest(stripeSecret, path, options = {}) {
+  if (!stripeSecret) throw new Error("Stripe is not configured.");
   const response = await fetch(`https://api.stripe.com/v1${path}`, {
     ...options,
     headers: {
-      authorization: `Bearer ${env.STRIPE_SECRET_KEY}`,
+      authorization: `Bearer ${stripeSecret}`,
       ...(options.headers || {}),
     },
   });
@@ -169,7 +177,8 @@ async function stripeRequest(env, path, options = {}) {
 }
 
 async function handlePayments(request, env, path) {
-  if (!env.STRIPE_SECRET_KEY) return json(request, env, { ok: false, error: "Stripe is not configured." }, 503);
+  const stripeSecret = await getStripeSecret(env);
+  if (!stripeSecret) return json(request, env, { ok: false, error: "Stripe is not configured." }, 503);
   const contentType = request.headers.get("content-type") || "";
   if (!contentType.includes("application/json")) {
     return json(request, env, { ok: false, error: "Content-Type must be application/json." }, 415);
@@ -205,7 +214,7 @@ async function handlePayments(request, env, path) {
     form.set("line_items[0][price_data][product_data][name]", product.name);
     form.set("line_items[0][price_data][product_data][description]", product.description);
 
-    const session = await stripeRequest(env, "/checkout/sessions", {
+    const session = await stripeRequest(stripeSecret, "/checkout/sessions", {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: form,
@@ -217,7 +226,7 @@ async function handlePayments(request, env, path) {
   if (!/^cs_(?:test_|live_)?[A-Za-z0-9_]+$/.test(sessionId)) {
     return json(request, env, { ok: false, error: "A valid checkout session is required." }, 400);
   }
-  const session = await stripeRequest(env, `/checkout/sessions/${encodeURIComponent(sessionId)}`);
+  const session = await stripeRequest(stripeSecret, `/checkout/sessions/${encodeURIComponent(sessionId)}`);
   const matches = session.client_reference_id === projectId;
   return json(request, env, {
     ok: true,
@@ -242,8 +251,8 @@ export default {
       return json(request, env, {
         ok: true,
         service: "frontlift-generator",
-        version: "1.1.0",
-        stripeConfigured: Boolean(env.STRIPE_SECRET_KEY),
+        version: "1.1.1",
+        stripeConfigured: Boolean(await getStripeSecret(env)),
         aiConfigured: Boolean(env.AI),
       });
     }
