@@ -65,6 +65,7 @@ function htmlToText(html) {
 }
 
 function parseModelJson(value) {
+  if (value && typeof value === "object") return value;
   const text = String(value || "").trim();
   const cleaned = text.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "");
   const start = cleaned.indexOf("{");
@@ -177,9 +178,10 @@ export default {
           { role: "user", content: promptFor({ sourceUrl: website.finalUrl, businessName, notes, sourceText: website.text }) },
         ],
         temperature: 0.25,
-        max_tokens: 3000,
+        max_tokens: 4096,
+        response_format: { type: "json_object" },
       });
-      const modelText = aiResponse?.response || aiResponse?.result?.response || "";
+      const modelText = aiResponse?.response ?? aiResponse?.result?.response ?? aiResponse?.result ?? aiResponse?.output_text ?? "";
       const result = parseModelJson(modelText);
 
       return json(request, env, {
