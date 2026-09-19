@@ -7,3 +7,8 @@ binding = "AI"
 
 [vars]
 MAX_SOURCE_CHARS = "30000"
+
+[[secrets_store_secrets]]
+binding = "STRIPE_SECRET_KEY"
+store_id = "1005f55318664df78bfab298dace3a10"
+secret_name = "STRIPE_SECRET_KEY"
