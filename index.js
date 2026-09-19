@@ -251,7 +251,7 @@ export default {
       return json(request, env, {
         ok: true,
         service: "frontlift-generator",
-        version: "1.1.1",
+        version: "1.1.2",
         stripeConfigured: Boolean(await getStripeSecret(env)),
         aiConfigured: Boolean(env.AI),
       });
